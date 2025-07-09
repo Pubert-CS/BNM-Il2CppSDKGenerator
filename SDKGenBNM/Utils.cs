@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using dnlib;
 using dnlib.DotNet;
 using System.Text.RegularExpressions;
+using Il2CppSDK;
 
 public static class Utils
 {
@@ -11,44 +12,72 @@ public static class Utils
         return char.IsDigit(str[0]);
     }
 
-    public static string Il2CppTypeToCppType(TypeSig type)
+    static readonly HashSet<string> PrimitiveTypes = new()
     {
-        if (type.IsGenericInstanceType)
-        {
-            return FormatIl2CppGeneric(type);
-        }
+        "System.Int8", "System.UInt8", "System.Int16", "System.UInt16",
+        "System.Int32", "System.UInt32", "System.Int64", "System.UInt64",
+        "System.Single", "System.Double", "System.Boolean", "System.Decimal",
+        "System.Char", "System.Byte", "System.SByte", "System.String",
+        "System.Void", "UnityEngine.Vector2", "UnityEngine.Vector3",
+        "UnityEngine.Quaternion", "UnityEngine.Rect"
+    };
 
-        string result = type.FullName switch
+    public static string Il2CppTypeToCppType(TypeDef type)
+    {
+        if (type == null)
+            return "void*";
+
+        string cppType = type.FullName switch
         {
             "System.Int8" => "int8_t",
             "System.UInt8" => "uint8_t",
             "System.Int16" => "int16_t",
             "System.UInt16" => "uint16_t",
-            "System.Int32" => "int32_t",
+            "System.Int32" => "int",
             "System.UInt32" => "uint32_t",
             "System.Int64" => "int64_t",
             "System.UInt64" => "uint64_t",
             "System.Single" => "float",
             "System.Double" => "double",
             "System.Boolean" => "bool",
+            "System.IntPtr" => "uintptr_t",
             "System.Decimal" => "BNM::Types::decimal",
             "System.Char" => "char",
             "System.Byte" => "BNM::Types::byte",
             "System.SByte" => "BNM::Types::sbyte",
             "System.String" => "BNM::Structures::Mono::String*",
+            "System.Type" => "BNM::MonoType*",
+            "System.Object" => "BNM::IL2CPP::Il2CppObject*",
             "UnityEngine.Vector2" => "BNM::Structures::Unity::Vector2",
             "UnityEngine.Vector3" => "BNM::Structures::Unity::Vector3",
             "UnityEngine.Quaternion" => "BNM::Structures::Unity::Quaternion",
             "UnityEngine.Rect" => "BNM::Structures::Unity::Rect",
+            "System.Array" => "BNM::Structures::Mono::Array<void*>*",
+            "T&" => "T**",
             "System.Void" => "void",
-            _ => "void*"
+            _ => type.IsEnum
+                ? type.FullName.Replace(".", "::").Replace("/", "::")
+                : type.FullName.Replace(".", "::").Replace("/", "::") + "*"
         };
 
-        if (type.FullName.Contains("[]"))
-            result = "BNM::Structures::Mono::Array<" + result + ">*";
+        string includePath = $"#include <SDK/{type.Module.Name}/Includes/{type.Namespace}/{type.Name}.h>";
+        if (!PrimitiveTypes.Contains(type.FullName) && !Program.fileIncludes.Contains(includePath))
+        {
+            Program.fileIncludes += includePath + "\n";
+        }
 
-        return result;
+        if (type.FullName.Contains("[]"))
+            cppType = $"BNM::Structures::Mono::Array<{cppType}>*";
+
+
+        cppType = cppType.Replace("&", "*").Replace("&*", "*");
+
+        return cppType.Replace("/", "::");
     }
+
+
+
+
 
     public static string FormatIl2CppGeneric(TypeSig type)
     {
@@ -73,7 +102,7 @@ public static class Utils
             {
                 args.Add(FormatIl2CppGeneric(arg));
             }
-            else args.Add(Il2CppTypeToCppType(arg));
+            else args.Add(Il2CppTypeToCppType(arg.TryGetTypeDef()));
         }
         result += string.Join(", ", args.ToArray());
         result += ">*";
