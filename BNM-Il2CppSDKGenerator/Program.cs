@@ -10,7 +10,7 @@ public class Program
 {
     public static string outputDir => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "output");
     public static string includeFolder => Path.Combine(outputDir, "include");
-    
+
     public class DependencyContext
     {
         public HashSet<string> IncludeFiles = new HashSet<string>();
@@ -18,7 +18,7 @@ public class Program
     }
 
     public static string[] ctorNames = new string[2] { ".ctor", "_ctor" };
-    
+
     static string[] opNames =
     {
         "op_Implicit", "op_Explicit", "op_Assign", "op_AdditionAssignment",
@@ -34,12 +34,24 @@ public class Program
         "op_Comma", "op_True", "op_False"
     };
 
+    public static string FixNamespace(string ns)
+    {
+        if (string.IsNullOrEmpty(ns)) return "GlobalNamespace";
+        var parts = ns.Split('.');
+        for (int i = 0; i < parts.Length; i++)
+        {
+            if (parts[i].StartsWith("Unity"))
+                parts[i] = "C" + parts[i];
+        }
+        return string.Join("::", parts);
+    }
+
     public static string GetFullCppPath(TypeDefinition type)
     {
         if (type.IsNested)
             return GetFullCppPath(type.DeclaringType) + "::" + type.Name.ToCppName();
-        
-        string ns = string.IsNullOrEmpty(type.Namespace) ? "GlobalNamespace" : type.Namespace.Replace(".", "::");
+
+        string ns = FixNamespace(type.Namespace);
         return "::" + ns + "::" + type.Name.ToCppName();
     }
 
@@ -65,9 +77,9 @@ public class Program
                 context.IncludeFiles.Add("BNM/ComplexMonoStructures.hpp");
                 return $"BNM::Structures::Mono::Dictionary<{args}>*";
             }
-            
+
             var resBase = git.ElementType.Resolve();
-            
+
             if (resBase != null && resBase.IsValueType && !resBase.IsEnum)
                 return "void*";
 
@@ -77,15 +89,15 @@ public class Program
                 {
                     TypeDefinition topLevelBase = resBase;
                     while (topLevelBase.IsNested) topLevelBase = topLevelBase.DeclaringType;
-                    string[] nsPartsBase = string.IsNullOrEmpty(topLevelBase.Namespace) ? new[] { "GlobalNamespace" } : topLevelBase.Namespace.Split('.');
-                    context.IncludeFiles.Add(string.Join("/", nsPartsBase) + "/" + topLevelBase.Name.ToCppName() + ".h");
+                    string ns = FixNamespace(topLevelBase.Namespace).Replace("::", "/");
+                    context.IncludeFiles.Add(ns + "/" + topLevelBase.Name.ToCppName() + ".h");
                 }
                 else
                 {
                     context.ForwardDeclTypes.Add(resBase);
                 }
             }
-            
+
             string baseCppName = resBase != null ? GetFullCppPath(resBase) : git.ElementType.Name.ToCppName();
             return $"{baseCppName}<{args}>*";
         }
@@ -112,8 +124,8 @@ public class Program
         {
             TypeDefinition topLevel = resolved;
             while (topLevel.IsNested) topLevel = topLevel.DeclaringType;
-            string[] nsParts = string.IsNullOrEmpty(topLevel.Namespace) ? new[] { "GlobalNamespace" } : topLevel.Namespace.Split('.');
-            context.IncludeFiles.Add(string.Join("/", nsParts) + "/" + topLevel.Name.ToCppName() + ".h");
+            string ns = FixNamespace(topLevel.Namespace).Replace("::", "/");
+            context.IncludeFiles.Add(ns + "/" + topLevel.Name.ToCppName() + ".h");
             return GetFullCppPath(resolved) + "*";
         }
 
@@ -150,7 +162,7 @@ public class Program
     public static void ParseFields(TypeDefinition type, CppCodeWriter writer, DependencyContext context)
     {
         if (!type.HasFields) return;
-        
+
         if (type.IsEnum)
         {
             for (int i = 0; i < type.Fields.Count; ++i)
@@ -164,6 +176,7 @@ public class Program
 
         foreach (var field in type.Fields)
         {
+            // cr https://github.com/sc2ad/Il2Cpp-Modding-Codegen/ for field getter/setter inspo
             string fieldType = GetCppTypeName(field.FieldType, context);
             string fieldName = field.Name.ToCppName();
             if (fieldType == "void*")
@@ -171,9 +184,9 @@ public class Program
                 writer.WriteLine("template <typename T = void*>");
                 fieldType = "T";
             }
-            
+
             if (field.IsStatic) writer.Write("static ");
-            writer.Write($"{fieldType} dyn_{fieldName}() ");
+            writer.Write($"{fieldType} _get_{fieldName}() ");
             writer.OpenBracket();
             string icn = "_class_internal_";
             string ifn = "_field_internal_";
@@ -183,7 +196,7 @@ public class Program
             writer.WriteLine($"return {ifn}.Get();");
             writer.CloseBracket();
 
-            fieldType = GetCppTypeName(field.FieldType, context); 
+            fieldType = GetCppTypeName(field.FieldType, context);
             if (fieldType == "void*")
             {
                 writer.WriteLine("template <typename T = void*>");
@@ -203,23 +216,23 @@ public class Program
     public static void ParseMethods(TypeDefinition type, CppCodeWriter writer, DependencyContext context)
     {
         if (!type.HasMethods) return;
-        
+
         HashSet<string> processedSignatures = new HashSet<string>();
 
         foreach (var method in type.Methods)
         {
             if (opNames.Contains(method.Name)) continue;
-            
+
             string icn = "_class_internal_";
             string imn = "_method_call_";
-            
+
             if (method.IsConstructor)
             {
                 if (method.IsStatic) continue;
-                
+
                 List<string> ctorTemplates = new List<string>();
                 var ctorParamTypes = new List<string>();
-                
+
                 for (int i = 0; i < method.Parameters.Count; i++)
                 {
                     string pType = GetCppTypeName(method.Parameters[i].ParameterType, context);
@@ -231,16 +244,16 @@ public class Program
                     }
                     ctorParamTypes.Add(pType);
                 }
-                
+
                 string sigKey = $"New_ctor<{ctorTemplates.Count}>({string.Join(",", ctorParamTypes)})";
                 if (!processedSignatures.Add(sigKey)) continue;
-                
+
                 string paramsDecl = string.Join(", ", method.Parameters.Select((x, i) => $"{ctorParamTypes[i]} {x.Name.ToCppName()}"));
                 string typeNameInternal = type.Name.ToCppName();
                 if (type.HasGenericParameters) typeNameInternal += $"<{string.Join(", ", type.GenericParameters.Select(p => p.Name))}>";
                 string ptr = type.IsValueType ? "" : "*";
                 string paramsCall = string.Join(", ", method.Parameters.Select(x => x.Name.ToCppName()));
-                
+
                 if (ctorTemplates.Count > 0) writer.WriteLine($"template <{string.Join(", ", ctorTemplates)}>");
                 writer.Write($"static {typeNameInternal}{ptr} New_ctor({paramsDecl}) ");
                 writer.OpenBracket();
@@ -252,14 +265,14 @@ public class Program
 
             List<string> methodTemplates = new List<string>();
             if (method.HasGenericParameters) methodTemplates.AddRange(method.GenericParameters.Select(p => $"typename {p.Name}"));
-            
+
             string typeName = GetCppTypeName(method.ReturnType, context);
             if (typeName == "void*")
             {
                 methodTemplates.Add("typename TRet = void*");
                 typeName = "TRet";
             }
-            
+
             List<string> finalParamTypes = new List<string>();
             for (int i = 0; i < method.Parameters.Count; i++)
             {
@@ -272,7 +285,7 @@ public class Program
                 }
                 finalParamTypes.Add(pType);
             }
-            
+
             string methodSigKey = $"{method.Name.ToCppName()}<{methodTemplates.Count}>({string.Join(",", finalParamTypes)})";
             if (!processedSignatures.Add(methodSigKey)) continue;
 
@@ -281,14 +294,14 @@ public class Program
             if (method.HasParameters) writer.Write(string.Join(", ", method.Parameters.Select((x, i) => $"{finalParamTypes[i]} {x.Name.ToCppName()}")));
             writer.Write(") ");
             writer.OpenBracket();
-            
+
             context.IncludeFiles.Add("BNM/MethodBase.hpp");
             context.IncludeFiles.Add("BNM/Method.hpp");
             writer.WriteLine($"static {GetClassGetter(type!, icn)};");
             string append = method.HasParameters ? $", {{{string.Join(", ", method.Parameters.Select(x => $"\"{x.Name}\""))}}}" : ", 0";
-            
+
             writer.WriteLine($"::BNM::Method<{typeName}> {imn} = {icn}.GetMethod(\"{method.Name}\"{append});");
-            
+
             if (!method.IsStatic)
             {
                 context.IncludeFiles.Add("BNM/Il2CppHeaders.hpp");
@@ -306,38 +319,38 @@ public class Program
         if (type.Name == "<Module>" || type.Name.StartsWith("<PrivateImplementationDetails>")) return;
 
         DependencyContext context = new DependencyContext();
-        
+
         TypeReference? baseTypeRef = type.BaseType;
         TypeDefinition? baseTypeDef = null;
         if (!type.IsValueType && baseTypeRef != null)
         {
-             baseTypeDef = baseTypeRef.Resolve();
-             if (baseTypeRef.FullName == "System.Object")
-             {
-                 context.IncludeFiles.Add("BNM/Il2CppHeaders.hpp");
-             }
-             else if (baseTypeDef != null)
-             {
-                 TypeDefinition topLevelBase = baseTypeDef;
-                 while (topLevelBase.IsNested) topLevelBase = topLevelBase.DeclaringType;
-                 string[] nsPartsBase = string.IsNullOrEmpty(topLevelBase.Namespace) ? new[] { "GlobalNamespace" } : topLevelBase.Namespace.Split('.');
-                 string path = string.Join("/", nsPartsBase) + "/" + topLevelBase.Name.ToCppName() + ".h";
-                 context.IncludeFiles.Add(path);
-             }
+            baseTypeDef = baseTypeRef.Resolve();
+            if (baseTypeRef.FullName == "System.Object")
+            {
+                context.IncludeFiles.Add("BNM/Il2CppHeaders.hpp");
+            }
+            else if (baseTypeDef != null)
+            {
+                TypeDefinition topLevelBase = baseTypeDef;
+                while (topLevelBase.IsNested) topLevelBase = topLevelBase.DeclaringType;
+                string nsPath = FixNamespace(topLevelBase.Namespace).Replace("::", "/");
+                string path = nsPath + "/" + topLevelBase.Name.ToCppName() + ".h";
+                context.IncludeFiles.Add(path);
+            }
         }
-        
-        if (type.HasFields) 
+
+        if (type.HasFields)
             foreach (var f in type.Fields) GetCppTypeName(f.FieldType, context);
-        if (type.HasMethods) 
-            foreach (var m in type.Methods) 
+        if (type.HasMethods)
+            foreach (var m in type.Methods)
             {
                 if (opNames.Contains(m.Name)) continue;
                 GetCppTypeName(m.ReturnType, context);
-                foreach(var p in m.Parameters) GetCppTypeName(p.ParameterType, context);
+                foreach (var p in m.Parameters) GetCppTypeName(p.ParameterType, context);
             }
 
-        string[] namespaceSplit = string.IsNullOrEmpty(type.Namespace) ? new[] { "GlobalNamespace" } : type.Namespace.Split('.');
-        
+        string[] namespaceSplit = FixNamespace(type.Namespace).Split(new[] { "::" }, StringSplitOptions.None);
+
         if (writer == null)
         {
             string fileFolder = includeFolder;
@@ -352,19 +365,22 @@ public class Program
             writer.WriteLine();
 
             context.ForwardDeclTypes.RemoveWhere(t => t.FullName == type.FullName || (t.DeclaringType != null && t.DeclaringType.FullName == type.FullName));
-            
+
             foreach (var fwd in context.ForwardDeclTypes)
             {
                 TypeDefinition root = fwd;
                 while (root.IsNested) root = root.DeclaringType;
-                
-                string ns = string.IsNullOrEmpty(root.Namespace) ? "GlobalNamespace" : root.Namespace.Replace(".", "::");
+
+                string ns = FixNamespace(root.Namespace);
                 string cppName = root.Name.ToCppName();
-                
-                if (root.HasGenericParameters) {
+
+                if (root.HasGenericParameters)
+                {
                     string templateArgs = string.Join(", ", Enumerable.Repeat("typename", root.GenericParameters.Count));
                     writer.WriteLine($"namespace {ns} {{ template <{templateArgs}> class {cppName}; }}");
-                } else {
+                }
+                else
+                {
                     writer.WriteLine($"namespace {ns} {{ class {cppName}; }}");
                 }
             }
@@ -384,7 +400,7 @@ public class Program
         }
 
         writer.Write($"{type.ClassType()} {type.Name.ToCppName()} ");
-        
+
         if (!type.IsValueType && baseTypeRef != null)
         {
             if (baseTypeRef.FullName == "System.Object")
@@ -395,7 +411,7 @@ public class Program
 
         writer.OpenBracket();
         if (!type.IsEnum) writer.WriteLine("public:");
-        
+
         if (type.HasNestedTypes)
         {
             foreach (var nestedType in type.NestedTypes) ParseType(nestedType, writer, true);
@@ -412,12 +428,12 @@ public class Program
         {
             foreach (string _ in namespaceSplit.Reverse()) writer.CloseBracket();
             writer.WriteLine();
-            
+
             writer.WriteInclude("BNM/Defaults.hpp");
 
             if (!type.HasGenericParameters)
             {
-                string resolvedTypeName = "::" + (string.IsNullOrEmpty(type.Namespace) ? "GlobalNamespace" : type.Namespace.Replace(".", "::")) + "::" + type.Name.ToCppName() + (type.IsValueType ? "" : "*");
+                string resolvedTypeName = GetFullCppPath(type) + (type.IsValueType ? "" : "*");
                 writer.WriteLine("template <>");
                 writer.Write("BNM::Defaults::DefaultTypeRef ");
                 writer.Write($"BNM::Defaults::Get<{resolvedTypeName}>() ");
@@ -434,7 +450,7 @@ public class Program
                 {
                     if (nt.IsValueType && !nt.IsEnum) continue;
                     if (nt.HasGenericParameters) continue;
-                    string resNtName = "::" + (string.IsNullOrEmpty(type.Namespace) ? "GlobalNamespace" : type.Namespace.Replace(".", "::")) + "::" + type.Name.ToCppName() + "::" + nt.Name.ToCppName() + (nt.IsValueType ? "" : "*");
+                    string resNtName = GetFullCppPath(nt) + (nt.IsValueType ? "" : "*");
                     writer.WriteLine("template <>");
                     writer.Write("BNM::Defaults::DefaultTypeRef ");
                     writer.Write($"BNM::Defaults::Get<{resNtName}>() ");
@@ -457,16 +473,16 @@ public class Program
             Console.WriteLine("Path not found, enter manually:");
             dummyDllPath = Console.ReadLine();
         }
-        
+
         if (string.IsNullOrEmpty(dummyDllPath) || !Directory.Exists(dummyDllPath)) return;
-        
+
         var resolver = new DefaultAssemblyResolver();
         resolver.AddSearchDirectory(dummyDllPath);
         var readerParams = new ReaderParameters { AssemblyResolver = resolver };
-        
+
         if (Directory.Exists(outputDir)) Directory.Delete(outputDir, true);
         Directory.CreateDirectory(outputDir);
-        
+
         foreach (string file in Directory.GetFiles(dummyDllPath, "*.dll"))
         {
             try
