@@ -52,3 +52,9 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# Extra
+BNM-Il2CppSDKGenerator/bin
+BNM-Il2CppSDKGenerator/obj
+bin
+obj
