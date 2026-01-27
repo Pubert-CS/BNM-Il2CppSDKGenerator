@@ -28,7 +28,7 @@ public class CppCodeWriter
     {
         if (type.IsNested) return;
 
-        string fixedNamespace = string.IsNullOrEmpty(type.Namespace) ? "GlobalNamespace" : type.Namespace;
+        string fixedNamespace = Program.FixNamespace(type.Namespace);
         
         if (!forwardDecls.ContainsKey(fixedNamespace))
             forwardDecls[fixedNamespace] = new List<string>();
@@ -44,8 +44,6 @@ public class CppCodeWriter
                 decl.Append($"template <{genericParams}> ");
             }
 
-            decl.Append($"{type.ClassType()} {type.Name.ToCppName()}");
-
             if (type.IsEnum)
             {
                 var enumValueField = type.Fields.FirstOrDefault(f => f.Name == "value__");
@@ -53,8 +51,13 @@ public class CppCodeWriter
                 if (enumValueField != null && Config.DefaultTypeMap.TryGetValue(enumValueField.FieldType.FullName, out var mapped))
                     underlyingType = mapped.Item1;
                 
-                decl.Append($" : {underlyingType}");
+                decl.Append($"enum class {type.Name.ToCppName()} : {underlyingType}");
             }
+            else
+            {
+                decl.Append($"{type.ClassType()} {type.Name.ToCppName()}");
+            }
+
             decl.Append(";");
             forwardDecls[fixedNamespace].Add(decl.ToString());
         }
@@ -107,7 +110,7 @@ public class CppCodeWriter
             writer.WriteLine("// Forward Declarations");
             foreach (var kvp in forwardDecls.OrderBy(x => x.Key))
             {
-                writer.WriteLine($"namespace {kvp.Key.Replace(".", "::")} {{");
+                writer.WriteLine($"namespace {kvp.Key} {{");
                 foreach (string decl in kvp.Value) writer.WriteLine($"\t{decl}");
                 writer.WriteLine("}");
             }

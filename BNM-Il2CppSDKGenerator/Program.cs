@@ -162,6 +162,8 @@ public class Program
     public static void ParseFields(TypeDefinition type, CppCodeWriter writer, DependencyContext context)
     {
         if (!type.HasFields) return;
+        writer.WriteInclude("BNM/FieldBase.hpp");
+        writer.WriteInclude("BNM/Field.hpp");
 
         if (type.IsEnum)
         {
@@ -188,8 +190,10 @@ public class Program
             if (field.IsStatic) writer.Write("static ");
             writer.Write($"{fieldType} _get_{fieldName}() ");
             writer.OpenBracket();
+            writer.WriteInclude("BNM/Class.hpp");
             string icn = "_class_internal_";
             string ifn = "_field_internal_";
+            writer.WriteInclude("BNM/Class.hpp");
             writer.WriteLine($"static {GetClassGetter(type!, icn)};");
             writer.WriteLine($"static ::BNM::Field<{fieldType}> {ifn} = {icn}.GetField(\"{field.Name}\");");
             if (!field.IsStatic) writer.WriteLine($"{ifn}.SetInstance(reinterpret_cast<::BNM::IL2CPP::Il2CppObject*>(this));");
@@ -218,11 +222,14 @@ public class Program
         if (!type.HasMethods) return;
 
         HashSet<string> processedSignatures = new HashSet<string>();
+        writer.WriteInclude("BNM/MethodBase.hpp");
+        writer.WriteInclude("BNM/Method.hpp");
 
         foreach (var method in type.Methods)
         {
             if (opNames.Contains(method.Name)) continue;
 
+            writer.WriteInclude("BNM/Class.hpp");
             string icn = "_class_internal_";
             string imn = "_method_call_";
 
@@ -257,6 +264,7 @@ public class Program
                 if (ctorTemplates.Count > 0) writer.WriteLine($"template <{string.Join(", ", ctorTemplates)}>");
                 writer.Write($"static {typeNameInternal}{ptr} New_ctor({paramsDecl}) ");
                 writer.OpenBracket();
+                writer.WriteInclude("BNM/Class.hpp");
                 writer.WriteLine($"static {GetClassGetter(type!, icn)};");
                 writer.WriteLine($"return ({typeNameInternal}{ptr}){icn}.CreateNewObjectParameters({paramsCall});");
                 writer.CloseBracket();
@@ -295,8 +303,7 @@ public class Program
             writer.Write(") ");
             writer.OpenBracket();
 
-            context.IncludeFiles.Add("BNM/MethodBase.hpp");
-            context.IncludeFiles.Add("BNM/Method.hpp");
+            writer.WriteInclude("BNM/Class.hpp");
             writer.WriteLine($"static {GetClassGetter(type!, icn)};");
             string append = method.HasParameters ? $", {{{string.Join(", ", method.Parameters.Select(x => $"\"{x.Name}\""))}}}" : ", 0";
 
@@ -317,6 +324,7 @@ public class Program
     {
         if (type.IsValueType && !type.IsEnum) return;
         if (type.Name == "<Module>" || type.Name.StartsWith("<PrivateImplementationDetails>")) return;
+        if (Config.DefaultTypeMap.ContainsKey(type.FullName)) return;
 
         DependencyContext context = new DependencyContext();
 
@@ -373,15 +381,28 @@ public class Program
 
                 string ns = FixNamespace(root.Namespace);
                 string cppName = root.Name.ToCppName();
+                string tag = root.IsEnum ? "enum class" : root.ClassType();
 
                 if (root.HasGenericParameters)
                 {
                     string templateArgs = string.Join(", ", Enumerable.Repeat("typename", root.GenericParameters.Count));
-                    writer.WriteLine($"namespace {ns} {{ template <{templateArgs}> class {cppName}; }}");
+                    writer.WriteLine($"namespace {ns} {{ template <{templateArgs}> {tag} {cppName}; }}");
                 }
                 else
                 {
-                    writer.WriteLine($"namespace {ns} {{ class {cppName}; }}");
+                    if (root.IsEnum)
+                    {
+                        var enumValueField = root.Fields.FirstOrDefault(f => f.Name == "value__");
+                        string underlyingType = "int";
+                        if (enumValueField != null && Config.DefaultTypeMap.TryGetValue(enumValueField.FieldType.FullName, out var mapped))
+                            underlyingType = mapped.Item1;
+                        
+                        writer.WriteLine($"namespace {ns} {{ enum class {cppName} : {underlyingType}; }}");
+                    }
+                    else
+                    {
+                        writer.WriteLine($"namespace {ns} {{ {tag} {cppName}; }}");
+                    }
                 }
             }
             writer.WriteLine();
@@ -439,6 +460,7 @@ public class Program
                 writer.Write($"BNM::Defaults::Get<{resolvedTypeName}>() ");
                 writer.OpenBracket();
                 writer.WriteLine($"static BNM::Defaults::Internal::ClassType classCache = nullptr;");
+                writer.WriteInclude("BNM/Class.hpp");
                 writer.WriteLine($"if (!classCache) classCache = {GetClassGetter(type)}._data;");
                 writer.WriteLine($"return ::BNM::Defaults::DefaultTypeRef {{ &classCache }};");
                 writer.CloseBracket();
@@ -456,6 +478,7 @@ public class Program
                     writer.Write($"BNM::Defaults::Get<{resNtName}>() ");
                     writer.OpenBracket();
                     writer.WriteLine($"static BNM::Defaults::Internal::ClassType classCache = nullptr;");
+                    writer.WriteInclude("BNM/Class.hpp");
                     writer.WriteLine($"if (!classCache) classCache = {GetClassGetter(nt)}._data;");
                     writer.WriteLine($"return BNM::Defaults::DefaultTypeRef {{ &classCache }};");
                     writer.CloseBracket();
@@ -467,7 +490,7 @@ public class Program
 
     public static void Main(string[] args)
     {
-        string? dummyDllPath = "/home/pubert/Downloads/Il2CppDumper-GT-LATEST/DummyDll";
+        string? dummyDllPath = "/home/pubert/DummyDll";
         if (!Directory.Exists(dummyDllPath))
         {
             Console.WriteLine("Path not found, enter manually:");
